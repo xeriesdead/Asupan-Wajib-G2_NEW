@@ -1,0 +1,35 @@
+# Environment & secrets
+.env
+env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS
+.DS_Store
+
+# Logs (isi log tidak perlu di GitHub, tapi folder tetap ada)
+logs/*.log
+logs/*.log.*
+
+# Database (jangan upload ke GitHub — berisi data user)
+*.db
+*.db-wal
+*.db-shm
+
+# Backup database
+backups/
+
+# Replit internal
+.cache/
+.pythonlibs/
+.upm/
+.agents/
+.local/
+
+# Asset sementara
+attached_assets/
+data/
