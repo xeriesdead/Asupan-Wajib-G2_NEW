@@ -1359,7 +1359,8 @@ async def lifespan(fastapi_app: FastAPI):
 
         try:
             if application:
-                await application.bot.delete_webhook()
+                # JANGAN delete_webhook() — webhook harus tetap aktif agar
+                # Railway instance baru langsung bisa terima pesan dari Telegram
                 await application.stop()
                 await application.shutdown()
         except Exception:
