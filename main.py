@@ -982,6 +982,88 @@ async def backup_now_command(update, context):
         logger.error(f"backup_now_command error: {e}")
         await msg.edit_text(f"❌ Gagal membuat backup: {e}")
 
+async def import_db_command(update, context):
+    """Handle /import_db — restore database dari file .db yang dikirim admin"""
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        return
+
+    msg = update.message
+
+    # Cek apakah ada file yang di-reply atau dikirim bersamaan
+    doc = None
+    if msg.document:
+        doc = msg.document
+    elif msg.reply_to_message and msg.reply_to_message.document:
+        doc = msg.reply_to_message.document
+
+    if not doc:
+        await msg.reply_text(
+            "📥 <b>Import Database</b>\n\n"
+            "Cara pakai:\n"
+            "1. Kirim file <code>.db</code> ke bot\n"
+            "2. Sambil kirim file, tulis caption: <code>/import_db</code>\n\n"
+            "Atau:\n"
+            "1. Reply ke file <code>.db</code> yang sudah ada\n"
+            "2. Ketik <code>/import_db</code>\n\n"
+            "⚠️ Database lama akan diganti permanen!",
+            parse_mode="HTML"
+        )
+        return
+
+    if not doc.file_name or not doc.file_name.endswith(".db"):
+        await msg.reply_text("❌ File harus berekstensi <code>.db</code>", parse_mode="HTML")
+        return
+
+    status = await msg.reply_text("⏳ Mengunduh dan mengimport database...")
+
+    try:
+        # Download file dari Telegram
+        file = await context.bot.get_file(doc.file_id)
+        tmp_path = DATABASE_PATH + ".import_tmp"
+        await file.download_to_drive(tmp_path)
+
+        # Validasi: pastikan file adalah SQLite database yang valid
+        import sqlite3 as _sqlite3
+        try:
+            test_conn = _sqlite3.connect(tmp_path)
+            test_conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            test_conn.close()
+        except Exception:
+            os.remove(tmp_path)
+            await status.edit_text("❌ File bukan database SQLite yang valid!")
+            return
+
+        # Backup database lama dulu
+        if os.path.exists(DATABASE_PATH):
+            old_backup = DATABASE_PATH + ".before_import"
+            shutil.copy2(DATABASE_PATH, old_backup)
+            logger.info(f"📦 Database lama dibackup ke {old_backup}")
+
+        # Tutup semua koneksi pool, ganti database, buka ulang
+        await db_pool.close()
+        shutil.move(tmp_path, DATABASE_PATH)
+        await db_pool.init()
+        await init_db()
+
+        file_size = os.path.getsize(DATABASE_PATH)
+        total_users = await get_total_users()
+        total_media = await get_total_media()
+
+        logger.info(f"✅ Database imported: {doc.file_name} ({file_size/1024:.1f} KB)")
+        await status.edit_text(
+            f"✅ <b>Database berhasil diimport!</b>\n\n"
+            f"📄 File: <code>{doc.file_name}</code>\n"
+            f"💾 Ukuran: {file_size/1024:.1f} KB\n"
+            f"👥 Users: {total_users:,}\n"
+            f"📹 Media: {total_media:,}",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"import_db_command error: {e}", exc_info=True)
+        await status.edit_text(f"❌ Gagal import database: {e}")
+
 async def cache_cleanup_task():
     logger.info("🗑️ Cache cleanup task started")
     while True:
@@ -1298,6 +1380,7 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CommandHandler("stats", stats_command))
         application.add_handler(CommandHandler("status", status_command))
         application.add_handler(CommandHandler("backup_now", backup_now_command))
+        application.add_handler(CommandHandler("import_db", import_db_command))
         application.add_handler(MessageHandler(filters.PHOTO, upload_handler))
         application.add_handler(MessageHandler(filters.VIDEO, upload_handler))
 
