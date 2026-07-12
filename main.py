@@ -1304,29 +1304,40 @@ async def lifespan(fastapi_app: FastAPI):
         await application.initialize()
         await application.start()
 
-        # Set webhook ke Telegram
-        full_webhook_url = WEBHOOK_URL.rstrip("/") + WEBHOOK_PATH
-        await application.bot.set_webhook(
-            url=full_webhook_url,
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=True,
-        )
-        logger.info(f"✅ Webhook set: {full_webhook_url}")
-
         cleanup_task_obj = asyncio.create_task(cache_cleanup_task())
-        background_tasks = [cleanup_task_obj]
 
-        await notify_admin(
-            application.bot,
-            f"✅ <b>Bot Online (Webhook Mode)</b>\n"
-            f"🤖 @{BOT_USERNAME}\n"
-            f"🔗 {full_webhook_url}\n"
-            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"📌 Pastikan cron-job.org sudah hit <code>/cron</code> setiap 5 menit."
-        )
+        # Set webhook dan notify admin di background agar server langsung siap
+        # terima request dari Telegram tanpa delay cold start
+        async def setup_webhook_background():
+            full_webhook_url = WEBHOOK_URL.rstrip("/") + WEBHOOK_PATH
+            try:
+                # Cek apakah webhook sudah benar, hindari pemanggilan ulang
+                wh = await application.bot.get_webhook_info()
+                if wh.url != full_webhook_url:
+                    await application.bot.set_webhook(
+                        url=full_webhook_url,
+                        allowed_updates=["message", "callback_query"],
+                        drop_pending_updates=True,
+                    )
+                    logger.info(f"✅ Webhook set: {full_webhook_url}")
+                    await notify_admin(
+                        application.bot,
+                        f"✅ <b>Bot Online (Webhook Mode)</b>\n"
+                        f"🤖 @{BOT_USERNAME}\n"
+                        f"🔗 {full_webhook_url}\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                        f"📌 Pastikan cron-job.org sudah hit <code>/cron</code> setiap 5 menit."
+                    )
+                else:
+                    logger.info(f"✅ Webhook sudah benar: {full_webhook_url}")
+            except Exception as e:
+                logger.error(f"❌ setup_webhook_background error: {e}")
+
+        webhook_setup_task = asyncio.create_task(setup_webhook_background())
+        background_tasks = [cleanup_task_obj, webhook_setup_task]
 
         logger.info("=" * 70)
-        logger.info("🟢 BOT IS RUNNING (WEBHOOK MODE)")
+        logger.info("🟢 BOT IS RUNNING (WEBHOOK MODE) — server siap terima request")
         logger.info("=" * 70)
 
         yield
