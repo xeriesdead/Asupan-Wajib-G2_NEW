@@ -1308,10 +1308,17 @@ async def lifespan(fastapi_app: FastAPI):
 
         # Set webhook dan notify admin di background agar server langsung siap
         # terima request dari Telegram tanpa delay cold start
+        # HANYA jalankan set_webhook jika ini berjalan di Railway (ada RAILWAY_PUBLIC_DOMAIN)
+        # Jika di Replit, skip agar tidak override webhook Railway
+        IS_RAILWAY = bool(os.getenv("RAILWAY_PUBLIC_DOMAIN", ""))
+
         async def setup_webhook_background():
+            if not IS_RAILWAY:
+                logger.info("ℹ️ Bukan Railway — skip set_webhook (hindari konflik dengan Railway)")
+                return
+
             full_webhook_url = WEBHOOK_URL.rstrip("/") + WEBHOOK_PATH
             try:
-                # Cek apakah webhook sudah benar, hindari pemanggilan ulang
                 wh = await application.bot.get_webhook_info()
                 if wh.url != full_webhook_url:
                     await application.bot.set_webhook(
