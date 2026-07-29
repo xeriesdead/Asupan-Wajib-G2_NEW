@@ -1,27 +1,40 @@
-# Workspace
+# Telegram Media Sharing Bot
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+Telegram bot for media sharing with admin upload, broadcast, and scheduled broadcast features. Deployed on Railway; source managed on GitHub. Replit is used as a code editor only.
 
 ## Stack
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- **Language**: Python 3
+- **Framework**: FastAPI + uvicorn (webhook mode)
+- **Bot library**: python-telegram-bot 20.7
+- **Database**: SQLite (with WAL mode, connection pool)
+- **Deployment**: Railway (uses `RAILWAY_PUBLIC_DOMAIN` for webhook URL)
 
-## Key Commands
+## Key Files
 
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
+- `main.py` — bot logic, FastAPI app, all handlers
+- `config.py` — configuration loaded from environment variables
+- `requirements.txt` — Python dependencies
+- `Procfile` — Railway process definition
 
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+## Required Environment Variables
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather (required) |
+| `CHANNEL` | Channel username e.g. `@YourChannel` |
+| `CHANNEL_ID` | Channel numeric ID |
+| `BOT_USERNAME` | Bot username without `@` |
+| `ADMIN_IDS` | Comma-separated admin Telegram user IDs |
+| `BACKUP_CHAT_ID` | Chat ID to receive DB backups |
+| `WEBHOOK_DOMAIN` | Override webhook URL (optional) |
+
+## Running (Railway)
+
+Deployed automatically via GitHub push. Railway sets `RAILWAY_PUBLIC_DOMAIN` which the bot uses to register its webhook.
+
+## User Preferences
+
+- This project runs on Railway + GitHub. Replit is used as a code editor only — do not set up a run workflow or attempt to run the bot here.
