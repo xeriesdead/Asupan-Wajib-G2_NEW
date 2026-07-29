@@ -1,11 +1,12 @@
 run = "python3 main.py"
 entrypoint = "main.py"
-modules = ["python-3.11"]
+modules = ["python-3.12"]
 
 [env]
 PYTHONUNBUFFERED = "1"
 
 [nix]
+channel = "stable-25_05"
 
 [[ports]]
 localPort = 8000
