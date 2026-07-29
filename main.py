@@ -240,11 +240,18 @@ def is_admin(uid):
     return uid in ADMIN_IDS
 
 async def check_joined(application, uid):
+    # Admin selalu lolos force sub — agar bisa test link sendiri
+    if is_admin(uid):
+        return True
     try:
         member = await application.bot.get_chat_member(CHANNEL, uid)
-        return member.status in ["member", "administrator", "creator"]
+        # "restricted" = sudah join tapi di-mute/dibatasi admin channel, tetap dihitung member
+        return member.status in ["member", "administrator", "creator", "restricted"]
     except Exception as e:
-        logger.warning(f"Check joined error: {e}")
+        # Log detail error agar mudah diagnosa (misal: bot bukan admin channel)
+        logger.warning(f"check_joined error untuk uid={uid}: {type(e).__name__}: {e}")
+        # Jika bot tidak bisa mengecek (bukan admin channel, dll), tolak akses
+        # → Pastikan bot sudah dijadikan Administrator di channel {CHANNEL}
         return False
 
 async def get_total_users():
