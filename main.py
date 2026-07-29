@@ -301,6 +301,7 @@ async def log_link_access(code: str, user_id: int, username: str):
 batch_buffer = {}
 batch_timers = {}
 album_cache = {}
+album_timers = {}
 ALBUM_TTL = 300
 
 async def cleanup_expired_caches():
@@ -464,7 +465,12 @@ async def upload_handler(update, context):
         code = album_cache[gid]["code"]
         context.application.create_task(save_media(code, file_id, media_type, caption))
 
-        async def send_album_link():
+        # Cancel any existing timer for this album and reschedule.
+        # This ensures only ONE link is sent, after all media have arrived.
+        if gid in album_timers:
+            album_timers[gid].cancel()
+
+        async def finalize_album(gid=gid, code=code, uid=uid):
             try:
                 await asyncio.sleep(3)
                 await set_ready(code)
@@ -475,12 +481,16 @@ async def upload_handler(update, context):
                     f"✅ LINK ALBUM READY\n\n🔗 {link}\n\n📌 Total media: {media_count}"
                 )
                 logger.info(f"✅ Album link sent: {code}")
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
                 logger.error(f"Error sending album link: {e}")
             finally:
                 album_cache.pop(gid, None)
+                album_timers.pop(gid, None)
 
-        context.application.create_task(send_album_link())
+        task = context.application.create_task(finalize_album())
+        album_timers[gid] = task
         return
 
     if uid not in batch_buffer:
