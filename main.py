@@ -12,10 +12,12 @@ import logging
 import logging.handlers
 import os
 import asyncio
+import gzip
 import sqlite3
 import random
 import string
 import shutil
+import zipfile
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from typing import Optional, List, Tuple
@@ -1017,7 +1019,7 @@ async def backup_now_command(update, context):
         await msg.edit_text(f"❌ Gagal membuat backup: {e}")
 
 async def import_db_command(update, context):
-    """Handle /import_db — restore database dari file .db yang dikirim admin"""
+    """Handle /import_db — restore database dari file .db atau arsipnya."""
     uid = update.effective_user.id
     msg = update.message
 
@@ -1041,27 +1043,60 @@ async def import_db_command(update, context):
         await msg.reply_text(
             "📥 <b>Import Database</b>\n\n"
             "Cara pakai:\n"
-            "1. Kirim file <code>.db</code> ke bot\n"
+            "1. Kirim file <code>.db</code>, <code>.db.gz</code>, atau "
+            "<code>.db.zip</code> ke bot\n"
             "2. Sambil kirim file, tulis caption: <code>/import_db</code>\n\n"
             "Atau:\n"
-            "1. Reply ke file <code>.db</code> yang sudah ada\n"
+            "1. Reply ke file database yang sudah ada\n"
             "2. Ketik <code>/import_db</code>\n\n"
+            "💡 Untuk file besar, kompres menjadi <code>.db.gz</code> atau "
+            "<code>.db.zip</code> sebelum dikirim.\n\n"
             "⚠️ Database lama akan diganti permanen!",
             parse_mode="HTML"
         )
         return
 
-    if not doc.file_name or not doc.file_name.endswith(".db"):
-        await msg.reply_text("❌ File harus berekstensi <code>.db</code>", parse_mode="HTML")
+    file_name = (doc.file_name or "").strip()
+    lower_file_name = file_name.lower()
+    supported_extensions = (".db", ".db.gz", ".db.zip")
+    if not lower_file_name.endswith(supported_extensions):
+        await msg.reply_text(
+            "❌ File harus berekstensi <code>.db</code>, <code>.db.gz</code>, "
+            "atau <code>.db.zip</code>",
+            parse_mode="HTML"
+        )
         return
 
-    status = await msg.reply_text("⏳ Mengunduh dan mengimport database...")
+    status = await msg.reply_text(
+        "⏳ Mengunduh dan menyiapkan database...\n"
+        "Arsip akan diekstrak dan divalidasi sebelum database aktif diganti."
+    )
 
+    download_path = DATABASE_PATH + ".import_download"
+    tmp_path = DATABASE_PATH + ".import_tmp"
     try:
         # Download file dari Telegram
         file = await context.bot.get_file(doc.file_id)
-        tmp_path = DATABASE_PATH + ".import_tmp"
-        await file.download_to_drive(tmp_path)
+        await file.download_to_drive(download_path)
+
+        # Arsip yang lebih kecil dapat melewati batas unduhan Telegram.
+        # Ekstrak hanya satu file database ke path sementara; jangan
+        # mengekstrak seluruh ZIP agar nama/path di dalam arsip tidak dipercaya.
+        if lower_file_name.endswith(".db.gz"):
+            with gzip.open(download_path, "rb") as compressed, open(tmp_path, "wb") as extracted:
+                shutil.copyfileobj(compressed, extracted)
+        elif lower_file_name.endswith(".db.zip"):
+            with zipfile.ZipFile(download_path, "r") as archive:
+                database_members = [
+                    info for info in archive.infolist()
+                    if not info.is_dir() and info.filename.lower().endswith(".db")
+                ]
+                if len(database_members) != 1:
+                    raise ValueError("arsip ZIP harus berisi tepat satu file .db")
+                with archive.open(database_members[0], "r") as compressed, open(tmp_path, "wb") as extracted:
+                    shutil.copyfileobj(compressed, extracted)
+        else:
+            shutil.move(download_path, tmp_path)
 
         # Validasi: pastikan file adalah SQLite database yang valid
         import sqlite3 as _sqlite3
@@ -1106,10 +1141,10 @@ async def import_db_command(update, context):
         total_users = await get_total_users()
         total_media = await get_total_media()
 
-        logger.info(f"✅ Database imported: {doc.file_name} ({file_size/1024:.1f} KB)")
+        logger.info(f"✅ Database imported: {file_name} ({file_size/1024:.1f} KB)")
         await status.edit_text(
             f"✅ <b>Database berhasil diimport!</b>\n\n"
-            f"📄 File: <code>{doc.file_name}</code>\n"
+            f"📄 File: <code>{file_name}</code>\n"
             f"💾 Ukuran: {file_size/1024:.1f} KB\n"
             f"👥 Users: {total_users:,}\n"
             f"📹 Media: {total_media:,}",
@@ -1118,7 +1153,20 @@ async def import_db_command(update, context):
 
     except Exception as e:
         logger.error(f"import_db_command error: {e}", exc_info=True)
-        await status.edit_text(f"❌ Gagal import database: {e}")
+        error_text = str(e)
+        if "file is too big" in error_text.lower():
+            error_text = (
+                "Telegram menolak unduhan karena file masih melebihi batas Bot API. "
+                "Kirim versi .db.gz atau .db.zip yang lebih kecil."
+            )
+        await status.edit_text(f"❌ Gagal import database: {error_text}")
+    finally:
+        for temporary_path in (download_path, tmp_path):
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError:
+                logger.warning(f"Unable to remove temporary import file: {temporary_path}")
 
 async def id_command(update, context):
     """Tampilkan ID Telegram untuk memeriksa konfigurasi ADMIN_IDS."""
