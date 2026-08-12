@@ -942,7 +942,15 @@ async def create_backup(application):
         backup_path = os.path.join(BACKUP_DIR, backup_name)
 
         if os.path.exists(DATABASE_PATH):
-            shutil.copy2(DATABASE_PATH, backup_path)
+            # Use SQLite's online backup API so the backup includes committed
+            # WAL data and remains consistent while the bot is running.
+            source_conn = sqlite3.connect(DATABASE_PATH, timeout=20)
+            backup_conn = sqlite3.connect(backup_path)
+            try:
+                source_conn.backup(backup_conn)
+            finally:
+                backup_conn.close()
+                source_conn.close()
             file_size = os.path.getsize(backup_path)
 
             logger.info(f"📦 Backup created: {backup_path} ({file_size/(1024*1024):.2f} MB)")
@@ -1053,11 +1061,27 @@ async def import_db_command(update, context):
         import sqlite3 as _sqlite3
         try:
             test_conn = _sqlite3.connect(tmp_path)
-            test_conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            integrity = test_conn.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or integrity[0] != "ok":
+                raise ValueError("integrity_check gagal")
+            tables = {
+                row[0]
+                for row in test_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "media" not in tables or "users" not in tables:
+                raise ValueError("tabel media/users tidak ditemukan")
             test_conn.close()
-        except Exception:
-            os.remove(tmp_path)
+        except Exception as validation_error:
+            try:
+                test_conn.close()
+            except Exception:
+                pass
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
             await status.edit_text("❌ File bukan database SQLite yang valid!")
+            logger.warning(f"Database import ditolak: {validation_error}")
             return
 
         # Backup database lama dulu
@@ -1382,6 +1406,10 @@ async def lifespan(fastapi_app: FastAPI):
     logger.info("=" * 70)
 
     try:
+        database_dir = os.path.dirname(os.path.abspath(DATABASE_PATH))
+        os.makedirs(database_dir, exist_ok=True)
+        logger.info(f"📁 Database path: {os.path.abspath(DATABASE_PATH)}")
+
         db_pool = DatabasePool(DATABASE_PATH, pool_size=5)
         await db_pool.init()
 

@@ -35,6 +35,18 @@ Telegram bot for media sharing with admin upload, broadcast, and scheduled broad
 
 Deployed automatically via GitHub push. Railway sets `RAILWAY_PUBLIC_DOMAIN` which the bot uses to register its webhook.
 
+### Persistent database storage
+
+SQLite must be stored on a Railway persistent Volume; the normal service filesystem
+can be reset when a deployment or instance changes.
+
+- Add a Railway Volume and mount it at `/data`
+- Set `DATABASE_PATH=/data/database.db` in Railway Variables
+- Redeploy, then restore the latest Telegram `.db` backup with `/import_db`
+
+The bot validates the SQLite file before replacing the active database and uses
+SQLite's online backup API for new backups.
+
 ## User Preferences
 
 - This project runs on Railway + GitHub. Replit is used as a code editor only — do not set up a run workflow or attempt to run the bot here.

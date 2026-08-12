@@ -29,7 +29,14 @@ else:
 
 WEBHOOK_PATH = "/webhook/telegram"
 
-DATABASE_PATH = os.getenv("DATABASE_PATH", "database.db")
+# Railway's regular filesystem is ephemeral between deployments/restarts.
+# When a persistent volume is mounted at /data, prefer it automatically;
+# DATABASE_PATH can still override this for local development or another mount.
+_persistent_db_dir = "/data" if os.path.isdir("/data") else "."
+DATABASE_PATH = os.getenv(
+    "DATABASE_PATH",
+    os.path.join(_persistent_db_dir, "database.db")
+)
 BACKUP_CHAT_ID = int(os.getenv("BACKUP_CHAT_ID", "8441460682"))
 AUTO_DELETE_TIMEOUT = int(os.getenv("AUTO_DELETE_TIMEOUT", "3600"))  # 1 jam
 BATCH_TIMEOUT = 10
