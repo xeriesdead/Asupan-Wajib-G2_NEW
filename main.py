@@ -287,6 +287,14 @@ async def increment_clicks(code):
     except Exception as e:
         logger.error(f"Error incrementing clicks: {e}")
 
+async def remove_user(uid):
+    """Hapus user dari database (misal: blokir bot atau akun tidak aktif)."""
+    try:
+        await db_pool.execute_write("DELETE FROM users WHERE user_id=?", (uid,))
+        logger.info(f"🗑️ User {uid} dihapus dari database (blokir/nonaktif)")
+    except Exception as e:
+        logger.error(f"Error removing user {uid}: {e}")
+
 async def log_link_access(code: str, user_id: int, username: str):
     try:
         await db_pool.execute_write(
@@ -591,6 +599,7 @@ async def broadcast_command(update, context):
                 err = str(e).lower()
                 if any(x in err for x in ["blocked", "deactivated", "not found", "chat not found", "kicked"]):
                     failed_blocked += 1
+                    context.application.create_task(remove_user(user_id))
                 else:
                     failed_other += 1
 
