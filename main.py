@@ -1019,10 +1019,16 @@ async def backup_now_command(update, context):
 async def import_db_command(update, context):
     """Handle /import_db — restore database dari file .db yang dikirim admin"""
     uid = update.effective_user.id
-    if not is_admin(uid):
-        return
-
     msg = update.message
+
+    if not is_admin(uid):
+        logger.warning(f"Unauthorized /import_db attempt from uid={uid}")
+        await msg.reply_text(
+            "❌ Perintah ini khusus admin.\n"
+            "Gunakan /id untuk melihat ID Telegram akun ini, lalu "
+            "pastikan ID tersebut ada di ADMIN_IDS Railway."
+        )
+        return
 
     # Cek apakah ada file yang di-reply atau dikirim bersamaan
     doc = None
@@ -1113,6 +1119,16 @@ async def import_db_command(update, context):
     except Exception as e:
         logger.error(f"import_db_command error: {e}", exc_info=True)
         await status.edit_text(f"❌ Gagal import database: {e}")
+
+async def id_command(update, context):
+    """Tampilkan ID Telegram untuk memeriksa konfigurasi ADMIN_IDS."""
+    uid = update.effective_user.id
+    admin_status = "✅ Terdaftar sebagai admin" if is_admin(uid) else "❌ Bukan admin"
+    await update.message.reply_text(
+        f"🆔 Telegram ID: <code>{uid}</code>\n"
+        f"🔐 Status: {admin_status}",
+        parse_mode="HTML"
+    )
 
 async def cache_cleanup_task():
     logger.info("🗑️ Cache cleanup task started")
@@ -1435,6 +1451,10 @@ async def lifespan(fastapi_app: FastAPI):
         application.add_handler(CommandHandler("status", status_command))
         application.add_handler(CommandHandler("backup_now", backup_now_command))
         application.add_handler(CommandHandler("import_db", import_db_command))
+        application.add_handler(CommandHandler("id", id_command))
+        # Process database files sent directly, including forwarded backups
+        # with a /import_db caption.
+        application.add_handler(MessageHandler(filters.Document.ALL, import_db_command))
         application.add_handler(MessageHandler(filters.PHOTO, upload_handler))
         application.add_handler(MessageHandler(filters.VIDEO, upload_handler))
 
