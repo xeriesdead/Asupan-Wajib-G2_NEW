@@ -12,8 +12,8 @@ import logging
 import logging.handlers
 import os
 import asyncio
-import sqlite3
 import gzip
+import sqlite3
 import random
 import string
 import shutil
@@ -1082,18 +1082,23 @@ async def import_db_command(update, context):
         await msg.reply_text(
             "📥 <b>Import Database</b>\n\n"
             "Cara pakai:\n"
-            "1. Kirim file <code>.db.gz</code> atau <code>.zip</code> ke bot\n"
+            "1. Kirim file <code>.db</code>, <code>.db.gz</code>, atau "
+            "<code>.zip</code> ke bot\n"
             "2. Sambil kirim file, tulis caption: <code>/import_db</code>\n\n"
             "Atau:\n"
             "1. Reply ke file database yang sudah ada\n"
             "2. Ketik <code>/import_db</code>\n\n"
+            "💡 Untuk file besar, kompres menjadi <code>.db.gz</code> atau "
+            "<code>.db.zip</code> sebelum dikirim.\n\n"
             "⚠️ Database lama akan diganti permanen!",
             parse_mode="HTML"
         )
         return
 
+    file_name = (doc.file_name or "").strip()
+    lower_file_name = file_name.lower()
     supported_extensions = (".db", ".db.gz", ".zip")
-    if not doc.file_name or not doc.file_name.lower().endswith(supported_extensions):
+    if not lower_file_name.endswith(supported_extensions):
         await msg.reply_text(
             "❌ File harus berekstensi <code>.db</code>, "
             "<code>.db.gz</code>, atau <code>.zip</code>",
@@ -1101,15 +1106,18 @@ async def import_db_command(update, context):
         )
         return
 
-    status = await msg.reply_text("⏳ Mengunduh dan mengimport database...")
+    status = await msg.reply_text(
+        "⏳ Mengunduh dan menyiapkan database...\n"
+        "Arsip akan diekstrak dan divalidasi sebelum database aktif diganti."
+    )
 
+    upload_path = DATABASE_PATH + ".import_upload"
+    tmp_path = DATABASE_PATH + ".import_tmp"
     try:
         # Download file dari Telegram
         file = await context.bot.get_file(doc.file_id)
-        upload_path = DATABASE_PATH + ".import_upload"
-        tmp_path = DATABASE_PATH + ".import_tmp"
         await file.download_to_drive(upload_path)
-        unpack_database_upload(upload_path, doc.file_name, tmp_path)
+        unpack_database_upload(upload_path, file_name, tmp_path)
 
         # Validasi: pastikan file adalah SQLite database yang valid
         import sqlite3 as _sqlite3
@@ -1154,10 +1162,10 @@ async def import_db_command(update, context):
         total_users = await get_total_users()
         total_media = await get_total_media()
 
-        logger.info(f"✅ Database imported: {doc.file_name} ({file_size/1024:.1f} KB)")
+        logger.info(f"✅ Database imported: {file_name} ({file_size/1024:.1f} KB)")
         await status.edit_text(
             f"✅ <b>Database berhasil diimport!</b>\n\n"
-            f"📄 File: <code>{doc.file_name}</code>\n"
+            f"📄 File: <code>{file_name}</code>\n"
             f"💾 Ukuran: {file_size/1024:.1f} KB\n"
             f"👥 Users: {total_users:,}\n"
             f"📹 Media: {total_media:,}",
@@ -1166,12 +1174,15 @@ async def import_db_command(update, context):
 
     except Exception as e:
         logger.error(f"import_db_command error: {e}", exc_info=True)
-        await status.edit_text(f"❌ Gagal import database: {e}")
+        error_text = str(e)
+        if "file is too big" in error_text.lower():
+            error_text = (
+                "Telegram menolak unduhan karena file masih melebihi batas Bot API. "
+                "Kirim versi .db.gz atau .zip yang lebih kecil."
+            )
+        await status.edit_text(f"❌ Gagal import database: {error_text}")
     finally:
-        for temporary_path in (
-            DATABASE_PATH + ".import_upload",
-            DATABASE_PATH + ".import_tmp",
-        ):
+        for temporary_path in (upload_path, tmp_path):
             try:
                 if os.path.exists(temporary_path):
                     os.remove(temporary_path)
