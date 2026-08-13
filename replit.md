@@ -42,10 +42,11 @@ can be reset when a deployment or instance changes.
 
 - Add a Railway Volume and mount it at `/data`
 - Set `DATABASE_PATH=/data/database.db` in Railway Variables
-- Redeploy, then restore the latest Telegram `.db` backup with `/import_db`
+- Redeploy, then restore the latest Telegram `.db.gz` or `.zip` backup with `/import_db`
 
 The bot validates the SQLite file before replacing the active database and uses
-SQLite's online backup API for new backups.
+SQLite's online backup API for new backups. New backups are gzip-compressed so
+they are easier to download again through Telegram's bot file-size limit.
 
 ## User Preferences
 
