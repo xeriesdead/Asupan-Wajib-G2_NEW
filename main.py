@@ -128,7 +128,8 @@ async def init_db():
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS media(
-                code TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
                 file_id TEXT NOT NULL,
                 type TEXT NOT NULL,
                 caption TEXT DEFAULT '',
@@ -137,6 +138,38 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        media_cols = [row[1] for row in c.execute("PRAGMA table_info(media)").fetchall()]
+        media_info = c.execute("PRAGMA table_info(media)").fetchall()
+        code_is_primary_key = any(row[1] == "code" and row[5] for row in media_info)
+        if code_is_primary_key:
+            # Older schemas allowed only one media row per link. Migrate without
+            # changing existing rows so one link can now contain an album.
+            c.execute("DROP TABLE IF EXISTS media_multi_migration")
+            c.execute("""
+                CREATE TABLE media_multi_migration(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL,
+                    file_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    caption TEXT DEFAULT '',
+                    click INTEGER DEFAULT 0,
+                    ready INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            media_copy_columns = [
+                column for column in
+                ("code", "file_id", "type", "caption", "click", "ready", "created_at")
+                if column in media_cols
+            ]
+            columns_sql = ", ".join(media_copy_columns)
+            c.execute(
+                f"INSERT INTO media_multi_migration ({columns_sql}) "
+                f"SELECT {columns_sql} FROM media"
+            )
+            c.execute("DROP TABLE media")
+            c.execute("ALTER TABLE media_multi_migration RENAME TO media")
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS users(
@@ -222,11 +255,13 @@ async def save_user(uid, username=None):
 async def save_media(code, file_id, media_type, caption=""):
     try:
         await db_pool.execute_write(
-            "INSERT OR REPLACE INTO media (code, file_id, type, caption, click, ready) VALUES (?, ?, ?, ?, 0, 0)",
+            "INSERT INTO media (code, file_id, type, caption, click, ready) VALUES (?, ?, ?, ?, 0, 0)",
             (code, file_id, media_type, caption)
         )
+        return True
     except Exception as e:
         logger.error(f"Error saving media: {e}")
+        return False
 
 async def set_ready(code):
     try:
@@ -265,7 +300,10 @@ async def get_total_media():
     return result[0] if result else 0
 
 async def get_total_clicks():
-    result = await db_pool.execute_read("SELECT SUM(click) FROM media", fetch_one=True)
+    result = await db_pool.execute_read(
+        "SELECT SUM(link_clicks) FROM (SELECT MAX(click) AS link_clicks FROM media GROUP BY code)",
+        fetch_one=True
+    )
     return result[0] if result else 0
 
 async def get_last_backup():
@@ -313,6 +351,7 @@ batch_timers = {}
 album_cache = {}
 album_timers = {}
 ALBUM_TTL = 300
+MAX_MEDIA_PER_LINK = 10
 
 async def cleanup_expired_caches():
     now = datetime.now()
@@ -322,28 +361,33 @@ async def cleanup_expired_caches():
     if expired:
         logger.info(f"🗑️ Cleaned {len(expired)} expired albums")
 
-async def finalize_batch(application, uid):
-    if uid not in batch_buffer:
+async def finalize_batch(application, uid, expected_code=None):
+    batch = batch_buffer.get(uid)
+    if not batch or (expected_code and batch["code"] != expected_code):
         return
 
-    code = batch_buffer[uid]["code"]
+    code = batch["code"]
+    batch_buffer.pop(uid, None)
+    timer = batch_timers.pop(uid, None)
+    if timer and timer is not asyncio.current_task():
+        timer.cancel()
 
     try:
+        media_count = len(await get_media_by_code(code))
+        if not media_count:
+            return
+
         await set_ready(code)
         link = f"https://t.me/{BOT_USERNAME}?start={code}"
-
         await application.bot.send_message(
             uid,
-            f"✅ LINK MEDIA READY\n\n🔗 {link}\n\n📌 Bagikan link ini ke user",
+            f"✅ LINK {'ALBUM' if media_count > 1 else 'MEDIA'} READY\n\n"
+            f"🔗 {link}\n\n📌 Total media: {media_count}",
             parse_mode="HTML"
         )
         logger.info(f"✅ Link sent to {uid}: {code}")
     except Exception as e:
         logger.error(f"Error sending link to {uid}: {e}")
-    finally:
-        batch_buffer.pop(uid, None)
-        if uid in batch_timers:
-            batch_timers[uid].cancel()
 
 # ===== HANDLERS =====
 
@@ -454,74 +498,44 @@ async def upload_handler(update, context):
     if msg.photo:
         file_id = msg.photo[-1].file_id
         media_type = "photo"
-        await update.message.reply_text("✅ Foto diterima")
     elif msg.video:
         file_id = msg.video.file_id
         media_type = "video"
-        await update.message.reply_text("✅ Video diterima")
     else:
         return
 
     caption = msg.caption or ""
-    gid = msg.media_group_id
-
-    if gid:
-        if gid not in album_cache:
-            album_cache[gid] = {
-                "code": gen_code(),
-                "expire_at": datetime.now() + timedelta(seconds=ALBUM_TTL)
-            }
-
-        code = album_cache[gid]["code"]
-        context.application.create_task(save_media(code, file_id, media_type, caption))
-
-        # Cancel any existing timer for this album and reschedule.
-        # This ensures only ONE link is sent, after all media have arrived.
-        if gid in album_timers:
-            album_timers[gid].cancel()
-
-        async def finalize_album(gid=gid, code=code, uid=uid):
-            try:
-                await asyncio.sleep(3)
-                await set_ready(code)
-                link = f"https://t.me/{BOT_USERNAME}?start={code}"
-                media_count = len(await get_media_by_code(code))
-                await context.bot.send_message(
-                    uid,
-                    f"✅ LINK ALBUM READY\n\n🔗 {link}\n\n📌 Total media: {media_count}"
-                )
-                logger.info(f"✅ Album link sent: {code}")
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"Error sending album link: {e}")
-            finally:
-                album_cache.pop(gid, None)
-                album_timers.pop(gid, None)
-
-        task = context.application.create_task(finalize_album())
-        album_timers[gid] = task
-        return
-
     if uid not in batch_buffer:
-        batch_buffer[uid] = {"code": gen_code()}
+        batch_buffer[uid] = {"code": gen_code(), "count": 0}
+    batch = batch_buffer[uid]
+    code = batch["code"]
+    if not await save_media(code, file_id, media_type, caption):
+        return
+    batch["count"] += 1
 
-    code = batch_buffer[uid]["code"]
-    context.application.create_task(save_media(code, file_id, media_type, caption))
+    if batch["count"] >= MAX_MEDIA_PER_LINK:
+        timer = batch_timers.pop(uid, None)
+        if timer:
+            timer.cancel()
+        await finalize_batch(context.application, uid, expected_code=code)
+        return
 
     if uid in batch_timers:
         batch_timers[uid].cancel()
 
-    async def finalize():
+    async def finalize_after_timeout():
         try:
             await asyncio.sleep(BATCH_TIMEOUT)
-            await finalize_batch(context.application, uid)
+            if batch_timers.get(uid) is asyncio.current_task():
+                await finalize_batch(
+                    context.application, uid, expected_code=code
+                )
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error(f"Finalize error: {e}")
 
-    task = context.application.create_task(finalize())
+    task = context.application.create_task(finalize_after_timeout())
     batch_timers[uid] = task
 
 # Track active broadcasts per admin
